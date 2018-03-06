@@ -3,7 +3,8 @@
 .externalToolBuilders
 .classpath
 .project
-.settings      
+.settings
+.imi
  ##filter databfile、sln file##
 *.mdb  
 *.ldb  

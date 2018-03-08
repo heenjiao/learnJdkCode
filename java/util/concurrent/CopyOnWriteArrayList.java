@@ -87,6 +87,18 @@ import java.util.function.UnaryOperator;
  * @since 1.5
  * @author Doug Lea
  * @param <E> the type of elements held in this collection
+ *
+ * Copy-On-Write简称COW，是一种用于程序设计中的优化策略。
+ * 其基本思路是，从一开始大家都在共享同一个内容，当某个人想要修改这个内容的时候，才会真正把内容Copy出去形成一个新的内容然后再改，这是一种延时懒惰策略。
+ *
+ * fast-safe 快速安全  (线程安全)
+ * fast-fail 快速失败  (线程不安全  多线程同时添加修改的时候会抛出异常)
+ *
+ * CopyOnWrite并发容器用于读多写少的并发场景  比如白名单，黑名单，商品类目的访问和更新场景
+ * *
+ * 1、读写分离，读和写分开
+ * 2、最终一致性 （不保证数据的实时一致性）
+ * 3、使用另外开辟空间的思路，来解决并发冲突
  */
 public class CopyOnWriteArrayList<E>
     implements List<E>, RandomAccess, Cloneable, java.io.Serializable {
@@ -537,6 +549,7 @@ public class CopyOnWriteArrayList<E>
         try {
             Object[] current = getArray();
             int len = current.length;
+            //java goto 语法 很少用
             if (snapshot != current) findIndex: {
                 int prefix = Math.min(index, len);
                 for (int i = 0; i < prefix; i++) {
@@ -1667,7 +1680,7 @@ public class CopyOnWriteArrayList<E>
         }
     }
 
-    // Support for resetting lock while deserializing
+    // Support for resetting lock while deserializing（并行）
     private void resetLock() {
         UNSAFE.putObjectVolatile(this, lockOffset, new ReentrantLock());
     }

@@ -4,7 +4,7 @@
 .classpath
 .project
 .settings
-.imi
+.idea
  ##filter databfile、sln file##
 *.mdb  
 *.ldb  
@@ -15,7 +15,9 @@
 *.dll  
 *.exe  
 *.o  
-*.so  
+*.so
+*.imi
+*.xml
 # compression file
 *.7z  
 *.dmg  

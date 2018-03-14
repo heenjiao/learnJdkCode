@@ -1028,7 +1028,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         for (Node<K,V>[] tab = table;;) {
             Node<K,V> f; int n, i, fh;
             if (tab == null || (n = tab.length) == 0)
-                tab = initTable();//默认size为16
+                tab = initTable();//初始化table 默认size为16
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {//i = (n -1) & hash:hash数组桶的index,非常类似hashMap的key计算方法
                 //2.如果这个key对应的数组f位置没有元素,则CAS初始化这个f数组元素(单向链表Node对象)
                 if (casTabAt(tab, i, null,  new Node<K,V>(hash, key, value, null)))
@@ -2230,6 +2230,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /**
      * Returns the stamp bits for resizing a table of size n.
      * Must be negative when shifted left by RESIZE_STAMP_SHIFT.
+     *
+     *
      */
     static final int resizeStamp(int n) {
         return Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1));
@@ -2241,7 +2243,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     private final Node<K,V>[] initTable() {
         Node<K,V>[] tab; int sc;
         while ((tab = table) == null || tab.length == 0) {
-            if ((sc = sizeCtl) < 0)// sizeCtl小于0，则进行线程让步等待
+            if ((sc = sizeCtl) < 0)// sizeCtl小于0，则进行线程让步等待 对于table的初始化工作，只能有一个线程在进行
                 Thread.yield(); // lost initialization race; just spin
             //CAS有3个操作数，内存值V，旧的预期值A，要修改的新值B。当且仅当预期值A和内存值V相同时，将内存值V修改为B，否则什么都不做
             else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {// 比较sizeCtl的值与sc是否相等，相等则用-1替换
@@ -2325,7 +2327,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     final Node<K,V>[] helpTransfer(Node<K,V>[] tab, Node<K,V> f) {
         Node<K,V>[] nextTab; int sc;
-        //table不为null & 结点类型是ForwardingNode & 结点的nextTable域不为空
+        //table不为null & 结点类型是ForwardingNode & 结点的nextTable也不为空
         if (tab != null && (f instanceof ForwardingNode) &&
             (nextTab = ((ForwardingNode<K,V>)f).nextTable) != null) {
             int rs = resizeStamp(tab.length);
@@ -2400,6 +2402,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             stride = MIN_TRANSFER_STRIDE; // subdivide range
         if (nextTab == null) {            // initiating
             try {
+                //根据当前数组长度n，新建一个两倍长度的数组nextTable
                 @SuppressWarnings("unchecked")
                 Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n << 1];
                 nextTab = nt;
@@ -2411,11 +2414,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             transferIndex = n;
         }
         int nextn = nextTab.length;
+        //构造一个连节点指针 用于标志位
         ForwardingNode<K,V> fwd = new ForwardingNode<K,V>(nextTab);
-        boolean advance = true;
+        boolean advance = true;//并发扩容的关键属性 如果等于true 说明这个节点已经处理过
         boolean finishing = false; // to ensure sweep before committing nextTab
         for (int i = 0, bound = 0;;) {
             Node<K,V> f; int fh;
+            //这个while循环体的作用就是在控制i--  通过i--可以依次遍历原hash表中的节点
             while (advance) {
                 int nextIndex, nextBound;
                 if (--i >= bound || finishing)
@@ -2436,11 +2441,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             if (i < 0 || i >= n || i + n >= nextn) {
                 int sc;
                 if (finishing) {
+                    //如果所有的节点都已经完成复制工作  就把nextTable赋值给table 清空临时对象nextTable
                     nextTable = null;
                     table = nextTab;
-                    sizeCtl = (n << 1) - (n >>> 1);
+                    sizeCtl = (n << 1) - (n >>> 1);//扩容阈值设置为原来容量的1.5倍  依然相当于现在容量的0.75倍
                     return;
                 }
+                //利用CAS方法更新这个扩容阈值，在这里面sizectl值减一，说明新加入一个线程参与到扩容操作
                 if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
                     if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)
                         return;
@@ -2448,16 +2455,21 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                     i = n; // recheck before commit
                 }
             }
+            //如果遍历到的节点为空 则放入ForwardingNode指针
             else if ((f = tabAt(tab, i)) == null)
                 advance = casTabAt(tab, i, null, fwd);
+            //如果遍历到ForwardingNode节点  说明这个点已经被处理过了 直接跳过  这里是控制并发扩容的核心
             else if ((fh = f.hash) == MOVED)
                 advance = true; // already processed
             else {
+                //节点上锁
                 synchronized (f) {
                     if (tabAt(tab, i) == f) {
                         Node<K,V> ln, hn;
-                        if (fh >= 0) {
+                        if (fh >= 0) {//链表
                             int runBit = fh & n;
+                            //以下的部分在完成的工作是构造两个链表  一个是原链表  另一个是原链表的反序排列
+                            //hash表的初值为0，即使hash表中不存在该key,那么调用hash[key]得到的值依然为0
                             Node<K,V> lastRun = f;
                             for (Node<K,V> p = f.next; p != null; p = p.next) {
                                 int b = p.hash & n;
@@ -2481,12 +2493,16 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 else
                                     hn = new Node<K,V>(ph, pk, pv, hn);
                             }
+                            //在nextTable的i位置上插入一个链表
                             setTabAt(nextTab, i, ln);
+                            //在nextTable的i+n的位置上插入另一个链表
                             setTabAt(nextTab, i + n, hn);
+                            //在table的i位置上插入forwardNode节点  表示已经处理过该节点
                             setTabAt(tab, i, fwd);
+                            //设置advance为true 返回到上面的while循环中 就可以执行i--操作
                             advance = true;
                         }
-                        else if (f instanceof TreeBin) {
+                        else if (f instanceof TreeBin) {//树
                             TreeBin<K,V> t = (TreeBin<K,V>)f;
                             TreeNode<K,V> lo = null, loTail = null;
                             TreeNode<K,V> hi = null, hiTail = null;

@@ -759,7 +759,12 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         return (Node<K,V>)U.getObjectVolatile(tab, ((long)i << ASHIFT) + ABASE);
     }
 
-    //比较table数组下标为i的结点是否为c，若为c，则用v置换
+    /** 比较table数组下标为i的结点是否为c，若为c，则用v置换
+     *   但是这边为什么i要等于((long)i << ASHIFT) + ABASE呢,计算偏移量
+     *   ASHIFT是指tab[i]中第i个元素在相对于数组第一个元素的偏移量，而ABASE就算第一数组的内存素的偏移地址
+     *   所以呢，((long)i << ASHIFT) + ABASE就算i最后的地址
+     *   那么compareAndSwapObject的作用就算tab[i]和c比较，如果相等就tab[i]=v否则tab[i]=c;
+     */
     static final <K,V> boolean casTabAt(Node<K,V>[] tab, int i,
                                         Node<K,V> c, Node<K,V> v) {
         return U.compareAndSwapObject(tab, ((long)i << ASHIFT) + ABASE, c, v);
@@ -786,6 +791,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * Base counter value, used mainly when there is no contention,
      * but also as a fallback during table initialization
      * races. Updated via CAS.
+     *
+     * 记录容器的容量大小(判断 树化和非树化)，通过CAS更新
      */
     private transient volatile long baseCount;
 
@@ -813,6 +820,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
 
     /**
      * Spinlock (locked via CAS) used when resizing and/or creating CounterCells.
+     *  自旋锁 （锁定通过 CAS） 在调整大小和/或创建 CounterCells 时使用。 在CounterCell类更新value中会使用，功能类似显示锁和内置锁，性能更好
+     *  在Striped64类也有应用
      */
     private transient volatile int cellsBusy;
 
@@ -1034,6 +1043,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 if (casTabAt(tab, i, null,  new Node<K,V>(hash, key, value, null)))
                     break;                   // no lock when adding to empty bin
             }
+            //如果Table节点是ForwardNode节点的话那么Hash的值就等于-1，MOVED == -1
+            // 那么什么时候Node会变成ForwardNode呢？就是在扩容的时候，旧的Table的节点会临时用ForwardNode代替
             else if ((fh = f.hash) == MOVED)//3.f结点已经转换为ForwardingNode,表示有其他线程正在扩容
                 tab = helpTransfer(tab, f); //在扩容时将table表中的结点转移到nextTable中
             else {
@@ -2231,7 +2242,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * Returns the stamp bits for resizing a table of size n.
      * Must be negative when shifted left by RESIZE_STAMP_SHIFT.
      *
-     *
+     *  // 返回与扩容有关的一个生成戳rs，每次新的扩容，都有一个不同的n，这个生成戳就是根据n来计算出来的一个数字，n不同，这个数字也不同
+     *  // 另外还得保证 rs << RESIZE_STAMP_SHIFT 必须是负数
+     *  // 这个方法的返回值，当且仅当 RESIZE_STAMP_SIZE = 32时为负数
+     *  // 但是b = 32时MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1 = 0，这一点很奇怪
      */
     static final int resizeStamp(int n) {
         return Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1));
@@ -2279,7 +2293,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     private final void addCount(long x, int check) {
         CounterCell[] as; long b, s;
-        //每次进来都baseCount 加1因为x=1
+        //每次进来baseCount都加1 因为x=1
         if ((as = counterCells) != null ||
             !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
             CounterCell a; long v; int m;
@@ -2313,6 +2327,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         transfer(tab, nt);
                 }
                 //将sizectl设置为一个很大的负数，然后进行transfer扩容,结束transfer后设置为下一次扩容的阈值
+                //这个时候sizeCtl已经等于(rs << RESIZE_STAMP_SHIFT) + 2等于一个大的负数，这边加上2很巧妙,
+                // 因为transfer后面对sizeCtl--操作的时候，最多只能减两次就结束
                 else if (U.compareAndSwapInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);//首次执行
@@ -2324,6 +2340,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /**
      * Helps transfer if a resize is in progress.
      *  //在扩容时将table表中的结点转移到nextTable中
+     *  其实helpTransfer（）方法的目的就是调用多个工作线程一起帮助进行扩容，这样的效率就会更高，
+     *  而不是只有检查到要扩容的那个线程进行扩容操作，其他线程就要等待扩容操作完成才能工作。
      */
     final Node<K,V>[] helpTransfer(Node<K,V>[] tab, Node<K,V> f) {
         Node<K,V>[] nextTab; int sc;
@@ -2333,6 +2351,9 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             int rs = resizeStamp(tab.length);
             while (nextTab == nextTable && table == tab &&
                    (sc = sizeCtl) < 0) {
+                // 这个if在addCount、helpTransfer、tryPresize中都有（可能会少一个条件，因为那个条件上文判断了），是理解这一点的重要的代码
+                // 实际看下代码，可以知道执行到这里时，sc（sc = sizeCtl）是一定小于0的
+                // 为真时会直接退出外层循环，然后退出方法
                 if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
                     sc == rs + MAX_RESIZERS || transferIndex <= 0)
                     break;
@@ -2398,9 +2419,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
         int n = tab.length, stride;
+        //每个线程处理桶的最小数目，可以看出核数越高步长越小，最小16个。
         if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE)
             stride = MIN_TRANSFER_STRIDE; // subdivide range
-        if (nextTab == null) {            // initiating
+        if (nextTab == null) {            // initiating 不会重复初始化，addCount()处已有分析。
             try {
                 //根据当前数组长度n，新建一个两倍长度的数组nextTable
                 @SuppressWarnings("unchecked")
@@ -2569,66 +2591,77 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     // See LongAdder version for explanation
     private final void fullAddCount(long x, boolean wasUncontended) {
         int h;
+        //获取当前线程的probe值作为hash值,如果0则强制初始化当前线程的Probe值，初始化的probe值不为0
         if ((h = ThreadLocalRandom.getProbe()) == 0) {
             ThreadLocalRandom.localInit();      // force initialization
             h = ThreadLocalRandom.getProbe();
-            wasUncontended = true;
+            wasUncontended = true;//设置未竞争标记为true
         }
+        //collide赋为false 代表没有发生冲突的情况
         boolean collide = false;                // True if last slot nonempty
         for (;;) {
             CounterCell[] as; CounterCell a; int n; long v;
             if ((as = counterCells) != null && (n = as.length) > 0) {
                 if ((a = as[(n - 1) & h]) == null) {
-                    if (cellsBusy == 0) {            // Try to attach new Cell
+                    if (cellsBusy == 0) {            // Try to attach new Cell 如果当前没有CounterCell就创建一个
                         CounterCell r = new CounterCell(x); // Optimistic create
                         if (cellsBusy == 0 &&
-                            U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                            U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {// 锁仍然是空闲的、且成功获取到锁
                             boolean created = false;
-                            try {               // Recheck under lock
+                            try {               // Recheck under lock 在持有锁时再次检查槽是否空闲。
                                 CounterCell[] rs; int m, j;
                                 if ((rs = counterCells) != null &&
                                     (m = rs.length) > 0 &&
-                                    rs[j = (m - 1) & h] == null) {
-                                    rs[j] = r;
+                                    rs[j = (m - 1) & h] == null) {// 所映射的槽仍为空
+                                    rs[j] = r; // 关联 cell 到槽
                                     created = true;
                                 }
                             } finally {
-                                cellsBusy = 0;
+                                cellsBusy = 0;// 释放锁
                             }
                             if (created)
-                                break;
-                            continue;           // Slot is now non-empty
+                                break; // 成功创建cell并关联到槽，退出
+                            continue;           // Slot is now non-empty  槽现在不为空了
                         }
                     }
+                    // 锁被占用了，重试
                     collide = false;
                 }
                 else if (!wasUncontended)       // CAS already known to fail
                     wasUncontended = true;      // Continue after rehash
                 else if (U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))
                     break;
+
+                // 表大小达到上限或扩容了；
+                // 表达到上限后就不会再尝试下面if的扩容了，只会重散列，尝试其他槽
                 else if (counterCells != as || n >= NCPU)
                     collide = false;            // At max size or stale
+                //  如果不存在冲突，则设置为存在冲突
                 else if (!collide)
                     collide = true;
+                // 有竞争，需要扩容
                 else if (cellsBusy == 0 &&
                          U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                    // 锁空闲且成功获取到锁
                     try {
-                        if (counterCells == as) {// Expand table unless stale
+                        if (counterCells == as) {// Expand table unless stale  距上一次检查后表没有改变，扩容：加倍
                             CounterCell[] rs = new CounterCell[n << 1];
                             for (int i = 0; i < n; ++i)
                                 rs[i] = as[i];
                             counterCells = rs;
                         }
                     } finally {
-                        cellsBusy = 0;
+                        cellsBusy = 0;// 释放锁
                     }
                     collide = false;
-                    continue;                   // Retry with expanded table
+                    continue;                   // Retry with expanded table 在扩容后的表上重试
                 }
+                // 没法获取锁，重散列，尝试其他槽
                 h = ThreadLocalRandom.advanceProbe(h);
             }
             else if (cellsBusy == 0 && counterCells == as &&
                      U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                // 加锁的情况下初始化表
                 boolean init = false;
                 try {                           // Initialize table
                     if (counterCells == as) {
@@ -2638,11 +2671,12 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         init = true;
                     }
                 } finally {
-                    cellsBusy = 0;
+                    cellsBusy = 0;// 释放锁
                 }
                 if (init)
-                    break;
+                    break;// 成功初始化，已更新，跳出循环
             }
+            // 表未被初始化，可能正在初始化，回退使用 base。
             else if (U.compareAndSwapLong(this, BASECOUNT, v = baseCount, v + x))
                 break;                          // Fall back on using base
         }
@@ -6334,6 +6368,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         try {
             U = sun.misc.Unsafe.getUnsafe();
             Class<?> k = ConcurrentHashMap.class;
+            //获取ConcurrentHashMap这个对象字段sizeCtl在内存中的偏移量
             SIZECTL = U.objectFieldOffset
                 (k.getDeclaredField("sizeCtl"));
             TRANSFERINDEX = U.objectFieldOffset
@@ -6346,10 +6381,14 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             CELLVALUE = U.objectFieldOffset
                 (ck.getDeclaredField("value"));
             Class<?> ak = Node[].class;
+            //可以获取数组第一个元素的偏移地址
             ABASE = U.arrayBaseOffset(ak);
+            //arrayIndexScale可以获取数组的转换因子，也就是数组中元素的增量地址
+            //将arrayBaseOffset与arrayIndexScale配合使用，可以定位数组中每个元素在内存中的位置。
             int scale = U.arrayIndexScale(ak);
-            if ((scale & (scale - 1)) != 0)
+            if ((scale & (scale - 1)) != 0)//判断是否是 2 的次幂
                 throw new Error("data type scale not a power of two");
+            //31 -  从左边第一个位开始累加0的个数，直到遇到一个非零值
             ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
         } catch (Exception e) {
             throw new Error(e);

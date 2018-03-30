@@ -2473,7 +2473,9 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
                     if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)
                         return;
-                    finishing = advance = true;
+                    //如果有多个线程进行扩容，那么这个值在第二个线程以后就不会相等，因为sizeCtl已经被减1了，所以后面的线程就只能直接返回,
+                    // 始终保证只有一个线程执行了
+                    finishing = advance = true;//finishing和advance保证线程已经扩容完成了可以退出循环
                     i = n; // recheck before commit
                 }
             }
@@ -2550,6 +2552,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                     ++hc;
                                 }
                             }
+                            //判断扩容后是否还需要红黑树结构
                             ln = (lc <= UNTREEIFY_THRESHOLD) ? untreeify(lo) :
                                 (hc != 0) ? new TreeBin<K,V>(lo) : t;
                             hn = (hc <= UNTREEIFY_THRESHOLD) ? untreeify(hi) :
